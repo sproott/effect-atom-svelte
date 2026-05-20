@@ -2,6 +2,8 @@
 
 Svelte 5 bindings for Effect Atom.
 
+This package is a pure AI port based on the other Effect Atom adapters. It aims to follow the same shape and behavior, but it has not had the same level of manual validation, so things can break.
+
 This package connects `effect/unstable/reactivity` atoms to Svelte's reactivity model. It provides a registry provider for scoped atom lifetimes and a small set of hooks for reading, writing, subscribing to, and awaiting atom state inside Svelte components.
 
 ## Requirements

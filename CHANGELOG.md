@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-20
+
+### Changed
+
+- Clarified in the README that this package is a pure AI port based on the other Effect Atom adapters and may still break.
+
 ## [1.0.0] - 2026-05-20
 
 ### Added
