@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### [1.0.2] - 2026-05-30
+
+### Fixed
+
+- Build now rewrites relative `.ts` import extensions to `.js` in the emitted `dist/*.js`, fixing `UNRESOLVED_IMPORT` / `ERR_MODULE_NOT_FOUND` failures when consuming the package from a bundler or Node ESM.
+
 ## [1.0.1] - 2026-05-20
 
 ### Changed
