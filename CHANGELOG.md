@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-06-21
+
+### Fixed
+
+- `useAtomValue`/`useAtom` and `useAtomRef` no longer hang on a stale value after swapping to an atom/ref whose value resolves asynchronously (e.g. a reactive input selecting a fresh query atom). The swap-tick getter dropped the consumer's reactive dependency on the subscribed value, so the eventual async result was never observed.
+
 ## [1.0.3] - 2026-06-21
 
 ### Fixed

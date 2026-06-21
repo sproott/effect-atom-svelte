@@ -1,6 +1,6 @@
-import { Cause } from 'effect'
+import { Cause, Effect } from 'effect'
 import { AsyncResult, Atom, AtomRef, AtomRegistry } from 'effect/unstable/reactivity'
-import { assert, describe, it } from 'vitest'
+import { assert, describe, it, vi } from 'vitest'
 
 import AtomRefHarness from './components/AtomRefHarness.svelte'
 import AtomRefPropHarness from './components/AtomRefPropHarness.svelte'
@@ -124,6 +124,58 @@ describe('atom-svelte', () => {
       })
       await tick()
       assert.strictEqual(observed.at(-1), 'B')
+    })
+
+    it('follows the swap to an ASYNC atom whose result lands after the swap', async () => {
+      // Effect-backed atoms whose value arrives asynchronously (via the
+      // subscription, not synchronously from `registry.get`). This is the real
+      // RPC-query case: `useAtomValue(() => Family.query(key))` where changing a
+      // reactive input swaps to a fresh, not-yet-resolved atom. The accessor must
+      // stay reactively bound to the new atom's eventual value.
+      const atomA = Atom.make(Effect.succeed('A').pipe(Effect.delay('10 millis')))
+      const atomB = Atom.make(Effect.succeed('B').pipe(Effect.delay('10 millis')))
+      const observed: Array<AsyncResult.AsyncResult<string, never>> = []
+
+      const last = () => observed.at(-1)
+      const lastValue = () => {
+        const result = last()
+        return result && AsyncResult.isSuccess(result) ? result.value : undefined
+      }
+      const waitFor = async (predicate: () => boolean) => {
+        await vi.waitFor(
+          () => {
+            assert.isTrue(predicate())
+          },
+          { timeout: 1000, interval: 5 }
+        )
+      }
+
+      const { rerender } = render(AtomValueSwapHarness, {
+        props: {
+          atomA,
+          atomB,
+          selectB: false,
+          onValue: (value: AsyncResult.AsyncResult<string, never>) => {
+            observed.push(value)
+          },
+        },
+      })
+
+      await waitFor(() => lastValue() === 'A')
+
+      // Swap to atomB. Its result resolves AFTER the swap, so the accessor must
+      // re-run when the new atom's value lands — not stay stuck on a stale read.
+      await rerender({
+        atomA,
+        atomB,
+        selectB: true,
+        onValue: (value: AsyncResult.AsyncResult<string, never>) => {
+          observed.push(value)
+        },
+      })
+
+      await waitFor(() => lastValue() === 'B')
+      assert.strictEqual(lastValue(), 'B')
     })
 
     it('works with computed Atom', async () => {

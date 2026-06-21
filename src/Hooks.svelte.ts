@@ -103,12 +103,11 @@ export const useAtomValue: {
   return createAtomAccessor(registry, f ? () => Atom.map(atom(), f) : atom)
 }
 
-// Re-subscribes when the thunk selects a different atom. `currentAtom` memoizes
-// the selected atom so the seed, subscription, and reads share one identity (the
-// mapped overload would otherwise build a throwaway `Atom.map` node per read).
-// The subscription drives `value` for steady-state reactivity; when the thunk
-// swaps atoms the `$effect` has not re-subscribed yet, so the getter reads the
-// new atom synchronously to avoid a one-tick stale value.
+// Re-subscribes when the thunk selects a different atom. `subscribedAtom` and
+// `value` are both `$state` and the getter always reads `value`, so a consumer
+// keeps its dependency on the subscribed value across a swap. The synchronous
+// `registry.get` branch only covers the tick before the deferred `$effect`
+// re-subscribes, avoiding a flash of the previous atom's value.
 const createAtomAccessor = <A>(
   registry: AtomRegistry.AtomRegistry,
   atom: () => Atom.Atom<A>
@@ -116,7 +115,7 @@ const createAtomAccessor = <A>(
   const currentAtom = $derived(atom())
   const initialAtom = untrack(() => currentAtom)
   let value = $state(registry.get(initialAtom))
-  let subscribedAtom = initialAtom
+  let subscribedAtom = $state(initialAtom)
   $effect(() => {
     const a = currentAtom
     return registry.subscribe(
@@ -130,9 +129,8 @@ const createAtomAccessor = <A>(
   })
   return {
     get current() {
-      // Once the thunk swaps atoms the `$effect` has not re-subscribed yet, so
-      // read the new atom synchronously rather than returning the stale value.
-      return subscribedAtom === currentAtom ? value : registry.get(currentAtom)
+      const current = value
+      return subscribedAtom === currentAtom ? current : registry.get(currentAtom)
     },
   }
 }
@@ -263,13 +261,11 @@ export const useAtomResource = <A, E>(
  * @category hooks
  */
 export const useAtomRef = <A>(ref: () => AtomRef.ReadonlyRef<A>): ReactiveValue<A> => {
-  // Same shape as `createAtomAccessor`: the subscription drives `subscribed` for
-  // steady-state reactivity, and a ref swap is reflected synchronously by
-  // reading the new ref in the getter before the `$effect` re-subscribes.
+  // Same shape as `createAtomAccessor`.
   const currentRef = $derived(ref())
   const initialRef = untrack(() => currentRef)
   let value = $state(initialRef.value)
-  let subscribedRef = initialRef
+  let subscribedRef = $state(initialRef)
   $effect(() => {
     const r = currentRef
     return r.subscribe((next) => {
@@ -279,9 +275,8 @@ export const useAtomRef = <A>(ref: () => AtomRef.ReadonlyRef<A>): ReactiveValue<
   })
   return {
     get current() {
-      // On a ref swap the `$effect` has not re-subscribed yet, so read the new
-      // ref synchronously rather than returning the previous ref's value.
-      return subscribedRef === currentRef ? value : currentRef.value
+      const current = value
+      return subscribedRef === currentRef ? current : currentRef.value
     },
   }
 }
