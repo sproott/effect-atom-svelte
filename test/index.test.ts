@@ -1,10 +1,13 @@
+import { Cause } from 'effect'
 import { AsyncResult, Atom, AtomRef, AtomRegistry } from 'effect/unstable/reactivity'
 import { assert, describe, it } from 'vitest'
 
 import AtomRefHarness from './components/AtomRefHarness.svelte'
 import AtomRefPropHarness from './components/AtomRefPropHarness.svelte'
 import AtomResourceHarness from './components/AtomResourceHarness.svelte'
+import AtomResourceReadHarness from './components/AtomResourceReadHarness.svelte'
 import AtomValueHarness from './components/AtomValueHarness.svelte'
+import AtomValueSwapHarness from './components/AtomValueSwapHarness.svelte'
 import InitialValuesHarness from './components/InitialValuesHarness.svelte'
 import ProviderHarness from './components/ProviderHarness.svelte'
 import WritableAtomHarness from './components/WritableAtomHarness.svelte'
@@ -89,6 +92,38 @@ describe('atom-svelte', () => {
       assert.strictEqual(observed, 'updated')
 
       registry.dispose()
+    })
+
+    it('re-subscribes when the thunk selects a different Atom', async () => {
+      const atomA = Atom.make('A')
+      const atomB = Atom.make('B')
+      const observed: Array<string> = []
+
+      const { rerender } = render(AtomValueSwapHarness, {
+        props: {
+          atomA,
+          atomB,
+          selectB: false,
+          onValue: (value: string) => {
+            observed.push(value)
+          },
+        },
+      })
+
+      await tick()
+      assert.strictEqual(observed.at(-1), 'A')
+
+      // The thunk now selects atomB; useAtomValue must follow the swap.
+      await rerender({
+        atomA,
+        atomB,
+        selectB: true,
+        onValue: (value: string) => {
+          observed.push(value)
+        },
+      })
+      await tick()
+      assert.strictEqual(observed.at(-1), 'B')
     })
 
     it('works with computed Atom', async () => {
@@ -179,6 +214,38 @@ describe('atom-svelte', () => {
       assert.deepStrictEqual(values, [0, 1])
     })
 
+    it('re-subscribes when the thunk selects a different AtomRef', async () => {
+      const ref1 = AtomRef.make('r1')
+      const ref2 = AtomRef.make('r2')
+      const observed: Array<string> = []
+
+      const { rerender } = render(AtomRefHarness, {
+        props: {
+          ref: ref1,
+          onValue: (value: string) => {
+            observed.push(value)
+          },
+        },
+      })
+
+      await tick()
+      assert.strictEqual(observed.at(-1), 'r1')
+
+      await rerender({
+        ref: ref2,
+        onValue: (value: string) => {
+          observed.push(value)
+        },
+      })
+      await tick()
+      assert.strictEqual(observed.at(-1), 'r2')
+
+      // The old ref must no longer drive the value.
+      ref1.set('r1-updated')
+      await tick()
+      assert.strictEqual(observed.at(-1), 'r2')
+    })
+
     it('updates when AtomRef prop changes', async () => {
       const ref = AtomRef.make({ count: 0, label: 'a' })
       const propRefValues: Array<number> = []
@@ -235,6 +302,55 @@ describe('atom-svelte', () => {
       ])
 
       assert.strictEqual(result, sentinel)
+    })
+
+    it('returns a stable Promise identity across reads for a Success result', async () => {
+      const atom = Atom.make(AsyncResult.success<number, Error>(1))
+      let read!: () => Promise<number>
+
+      render(AtomResourceReadHarness, {
+        props: {
+          atom: () => atom,
+          onReady: (next: () => Promise<number>) => {
+            read = next
+          },
+        },
+      })
+
+      await tick()
+
+      const first = read()
+      const second = read()
+      assert.strictEqual(first, second)
+      assert.strictEqual(await first, 1)
+    })
+
+    it('returns a stable rejected Promise identity for a Failure result', async () => {
+      const error = new Error('boom')
+      const atom = Atom.make(AsyncResult.failure<number, Error>(Cause.fail(error)))
+      let read!: () => Promise<number>
+
+      render(AtomResourceReadHarness, {
+        props: {
+          atom: () => atom,
+          onReady: (next: () => Promise<number>) => {
+            read = next
+          },
+        },
+      })
+
+      await tick()
+
+      const first = read()
+      const second = read()
+      assert.strictEqual(first, second)
+      await first.then(
+        () => assert.fail('expected rejection'),
+        (reason) => {
+          // useAtomResource rejects with the squashed cause, i.e. the original error.
+          assert.strictEqual(reason, error)
+        }
+      )
     })
   })
 })

@@ -8,43 +8,13 @@ import * as AsyncResult from 'effect/unstable/reactivity/AsyncResult'
 import * as Atom from 'effect/unstable/reactivity/Atom'
 import type * as AtomRef from 'effect/unstable/reactivity/AtomRef'
 import * as AtomRegistry from 'effect/unstable/reactivity/AtomRegistry'
-import { createSubscriber } from 'svelte/reactivity'
+import { untrack } from 'svelte'
 import { getRegistry } from './RegistryContext.ts'
 
 const initialValuesSet = new WeakMap<AtomRegistry.AtomRegistry, WeakSet<Atom.Atom<any>>>()
 
 type ReactiveValue<A> = {
   readonly current: A
-}
-
-class ReactiveValueImpl<A> implements ReactiveValue<A> {
-  #value: A
-  readonly #subscribe: () => void
-
-  constructor(initialValue: A, observe: (setValue: (_: A) => void) => void | (() => void)) {
-    this.#value = $state(initialValue)
-    this.#subscribe = createSubscriber((update) => {
-      return observe((nextValue) => {
-        if (Object.is(this.#value, nextValue)) {
-          return
-        }
-        this.#value = nextValue
-        update()
-      })
-    })
-  }
-
-  get current(): A {
-    this.#subscribe()
-    return this.#value
-  }
-}
-
-const makeReactiveValue = <A>(
-  initialValue: A,
-  observe: (setValue: (_: A) => void) => void | (() => void)
-): ReactiveValue<A> => {
-  return new ReactiveValueImpl(initialValue, observe)
 }
 
 const flattenExit = <A, E>(exit: Exit.Exit<A, E>): A => {
@@ -130,10 +100,41 @@ export const useAtomValue: {
   <A, B>(atom: () => Atom.Atom<A>, f: (_: A) => B): ReactiveValue<B>
 } = <A>(atom: () => Atom.Atom<A>, f?: (_: A) => A): ReactiveValue<A> => {
   const registry = getRegistry()
-  const getAtom = f ? () => Atom.map(atom(), f) : atom
-  return makeReactiveValue(registry.get(getAtom()), (setValue) => {
-    return registry.subscribe(getAtom(), setValue as any, constImmediate)
+  return createAtomAccessor(registry, f ? () => Atom.map(atom(), f) : atom)
+}
+
+// Re-subscribes when the thunk selects a different atom. `currentAtom` memoizes
+// the selected atom so the seed, subscription, and reads share one identity (the
+// mapped overload would otherwise build a throwaway `Atom.map` node per read).
+// The subscription drives `value` for steady-state reactivity; when the thunk
+// swaps atoms the `$effect` has not re-subscribed yet, so the getter reads the
+// new atom synchronously to avoid a one-tick stale value.
+const createAtomAccessor = <A>(
+  registry: AtomRegistry.AtomRegistry,
+  atom: () => Atom.Atom<A>
+): ReactiveValue<A> => {
+  const currentAtom = $derived(atom())
+  const initialAtom = untrack(() => currentAtom)
+  let value = $state(registry.get(initialAtom))
+  let subscribedAtom = initialAtom
+  $effect(() => {
+    const a = currentAtom
+    return registry.subscribe(
+      a,
+      (next) => {
+        subscribedAtom = a
+        value = next as A
+      },
+      constImmediate
+    )
   })
+  return {
+    get current() {
+      // Once the thunk swaps atoms the `$effect` has not re-subscribed yet, so
+      // read the new atom synchronously rather than returning the stale value.
+      return subscribedAtom === currentAtom ? value : registry.get(currentAtom)
+    },
+  }
 }
 
 const constImmediate = { immediate: true }
@@ -201,7 +202,7 @@ export const useAtom = <R, W, const Mode extends 'value' | 'promise' | 'promiseE
       : (value: W | ((value: R) => W)) => void,
 ] => {
   const registry = getRegistry()
-  return [useAtomValue(atom), setAtom(registry, atom, options)] as const
+  return [createAtomAccessor(registry, atom), setAtom(registry, atom, options)] as const
 }
 
 /**
@@ -220,6 +221,7 @@ export const useAtomSubscribe = <A>(
 }
 
 const constUnresolvedPromise = new Promise<never>(() => {})
+const constVoid = (): void => {}
 
 /**
  * @since 1.0.0
@@ -232,16 +234,26 @@ export const useAtomResource = <A, E>(
   }
 ): ReactiveValue<Promise<A>> => {
   const result = useAtomValue(atom)
+  // Memoize the Promise per `AsyncResult` identity so repeated reads return the
+  // same instance and `{#await}` does not re-enter pending on unrelated updates.
+  // Mirrors Solid's `createResource` / React's `atomPromiseMap` caching.
+  const promise = $derived.by(() => {
+    const current = result.current
+    if (AsyncResult.isInitial(current) || (options?.suspendOnWaiting && current.waiting)) {
+      return constUnresolvedPromise
+    }
+    if (AsyncResult.isSuccess(current)) {
+      return Promise.resolve(current.value)
+    }
+    const rejected = Promise.reject(Cause.squash(current.cause))
+    // The cached rejected Promise may never be awaited (e.g. read outside
+    // `{#await}`); mark it handled so it cannot emit `unhandledrejection`.
+    rejected.catch(constVoid)
+    return rejected
+  })
   return {
     get current() {
-      const current = result.current
-      if (AsyncResult.isInitial(current) || (options?.suspendOnWaiting && current.waiting)) {
-        return constUnresolvedPromise
-      }
-      if (AsyncResult.isSuccess(current)) {
-        return Promise.resolve(current.value)
-      }
-      return Promise.reject(Cause.squash(current.cause))
+      return promise
     },
   }
 }
@@ -251,9 +263,27 @@ export const useAtomResource = <A, E>(
  * @category hooks
  */
 export const useAtomRef = <A>(ref: () => AtomRef.ReadonlyRef<A>): ReactiveValue<A> => {
-  return makeReactiveValue(ref().value, (setValue) => {
-    return ref().subscribe(setValue)
+  // Same shape as `createAtomAccessor`: the subscription drives `subscribed` for
+  // steady-state reactivity, and a ref swap is reflected synchronously by
+  // reading the new ref in the getter before the `$effect` re-subscribes.
+  const currentRef = $derived(ref())
+  const initialRef = untrack(() => currentRef)
+  let value = $state(initialRef.value)
+  let subscribedRef = initialRef
+  $effect(() => {
+    const r = currentRef
+    return r.subscribe((next) => {
+      subscribedRef = r
+      value = next
+    })
   })
+  return {
+    get current() {
+      // On a ref swap the `$effect` has not re-subscribed yet, so read the new
+      // ref synchronously rather than returning the previous ref's value.
+      return subscribedRef === currentRef ? value : currentRef.value
+    },
+  }
 }
 
 /**
@@ -264,7 +294,8 @@ export const useAtomRefProp = <A, K extends keyof A>(
   ref: () => AtomRef.AtomRef<A>,
   prop: K
 ): (() => AtomRef.AtomRef<A[K]>) => {
-  return () => ref().prop(prop)
+  const propRef = $derived(ref().prop(prop))
+  return () => propRef
 }
 
 /**

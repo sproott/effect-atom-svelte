@@ -6,7 +6,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
-### [1.0.2] - 2026-05-30
+## [1.0.3] - 2026-06-21
+
+### Fixed
+
+- `useAtomResource` now returns a stable `Promise` identity per `AsyncResult` value instead of minting a new `Promise` on every read. This stops `{#await}` from re-entering its pending block on unrelated updates and prevents `unhandledrejection` warnings from discarded rejected promises on the failure path. Mirrors the caching done by the official Solid (`createResource`) and React (`atomPromiseMap`) adapters.
+- `useAtomValue`/`useAtom` and `useAtomRef` now reflect an atom/ref swap synchronously instead of one tick late, matching the behavior of the official adapters.
+
+### Changed
+
+- The mapped `useAtomValue` overload no longer creates a throwaway `Atom.map` registry node per accessor: the selected atom is memoized so the seed, subscription, and reads share a single identity.
+
+## [1.0.2] - 2026-05-30
 
 ### Fixed
 
