@@ -268,6 +268,8 @@ export const useAtomRef = <A>(ref: () => AtomRef.ReadonlyRef<A>): ReactiveValue<
   let subscribedRef = $state(initialRef)
   $effect(() => {
     const r = currentRef
+    subscribedRef = r
+    value = r.value
     return r.subscribe((next) => {
       subscribedRef = r
       value = next

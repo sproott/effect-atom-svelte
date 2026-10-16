@@ -246,6 +246,27 @@ describe('atom-svelte', () => {
   })
 
   describe('AtomRef', () => {
+    it('reads updates made before the initial subscription', async () => {
+      const ref = AtomRef.make(0)
+      let observed: number | undefined
+
+      render(AtomRefHarness, {
+        props: {
+          ref,
+          onReady: () => {
+            ref.set(1)
+          },
+          onValue: (value: number) => {
+            observed = value
+          },
+        },
+      })
+
+      await tick()
+      assert.strictEqual(ref.value, 1)
+      assert.strictEqual(observed, 1)
+    })
+
     it('updates when AtomRef changes', async () => {
       const ref = AtomRef.make(0)
       const values: Array<number> = []
